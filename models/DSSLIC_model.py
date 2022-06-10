@@ -6,10 +6,12 @@ import torch
 import os
 from torch.autograd import Variable
 from util.image_pool import ImagePool
+from . import networks, pytorch_msssim
 from .base_model import BaseModel
-from . import networks
+# from .networks import *  # osman edited
+
 from PIL import Image
-import pytorch_msssim
+from .pytorch_msssim import *
 import util.util as util
 import os
 import time
@@ -23,7 +25,7 @@ class DSSLICModel(BaseModel):
 
     def initialize(self, opt):
         BaseModel.initialize(self, opt)
-        if opt.resize_or_crop != 'none': # when training at full res this causes OOM
+        if opt.resize_or_crop != 'none': # when training at full nn_generated_details this causes OOM
             torch.backends.cudnn.benchmark = True
         self.isTrain = opt.isTrain
         input_nc = opt.label_nc if opt.label_nc != 0 else 3
@@ -38,8 +40,8 @@ class DSSLICModel(BaseModel):
         if not opt.no_instance:
             netG_input_nc += 1
         
-        self.compG = networks.define_compG(netG_input_nc, opt.output_nc, opt.ncf, opt.n_downsample_comp, norm=opt.norm, gpu_ids=self.gpu_ids)  
-        self.netG = networks.define_G(netG_input_nc, opt.output_nc, opt.ngf, opt.netG, opt.n_downsample_global, opt.n_blocks_global, opt.n_local_enhancers, 
+        self.compG = networks.define_compG(opt.comp_type, netG_input_nc, opt.output_nc, opt.ncf, opt.n_downsample_comp, norm=opt.norm, gpu_ids=self.gpu_ids)
+        self.netG = networks.define_G(netG_input_nc, opt.output_nc, opt.ngf, opt.netG, opt.n_downsample_global, opt.n_blocks_global, opt.n_local_enhancers,
                                       opt.n_blocks_local, opt.norm, gpu_ids=self.gpu_ids)        
 
         # Discriminator network
@@ -48,7 +50,7 @@ class DSSLICModel(BaseModel):
             netD_input_nc = input_nc + opt.output_nc
             if not opt.no_instance:
                 netD_input_nc += 1
-            self.netD = networks.define_D(netD_input_nc, opt.ndf, opt.n_layers_D, opt.norm, use_sigmoid, 
+            self.netD = networks.define_D(netD_input_nc, opt.ndf, opt.n_layers_D, opt.norm, use_sigmoid,
                                           opt.num_D, not opt.no_ganFeat_loss, gpu_ids=self.gpu_ids)
             
         print('---------- Networks initialized -------------')
@@ -60,6 +62,7 @@ class DSSLICModel(BaseModel):
             self.load_network(self.compG, 'C', opt.which_epoch, pretrained_path)                        
             if self.isTrain:
                 self.load_network(self.netD, 'D', opt.which_epoch, pretrained_path)  
+
 
         # set loss functions and optimizers
         if self.isTrain:
@@ -97,7 +100,6 @@ class DSSLICModel(BaseModel):
             # optimizer D                        
             params = list(self.netD.parameters())    
             self.optimizer_D = torch.optim.Adam(params, lr=opt.lr, betas=(opt.beta1, 0.999))
-
 
     def encode_input(self, flabel_map=None, real_image=None, ds_image=None, infer=False):
         input_flabel = None        
@@ -150,11 +152,16 @@ class DSSLICModel(BaseModel):
 
           ### tensor-level bilinear
           upsample = torch.nn.Upsample(scale_factor=self.opt.alpha, mode='bilinear')      
-          up_image = upsample(comp_image)      
+          up_image = upsample(comp_image)
 
-        else: # use bicubic downsampling (ds)
-          up_image = ds_image
-          
+        ## begining of stuff to edit for Wavelet transform
+        elif self.opt.comp_type=='ds' or self.opt.comp_type=='jp2': # use bicubic downsampling (ds)
+            comp_image = ds_image
+            up_image = ds_image
+        ## end of stuff to edit for Wavelet transform
+
+
+
         if not self.opt.no_seg: # seg
           if self.opt.comp_type!='none': # seg, ds | comp_image
             input_fconcat = torch.cat((input_flabel, up_image), dim=1)
@@ -166,8 +173,8 @@ class DSSLICModel(BaseModel):
             input_fconcat = up_image                        
 
         # add compact image, so that G tries to find the best residual
-        res = self.netG.forward(input_fconcat)
-        fake_image_f = res + up_image
+        nn_generated_details = self.netG.forward(input_fconcat)
+        fake_image_f = nn_generated_details + up_image
 
         # Fake Detection and Loss        
         pred_fake_pool_f = self.discriminate(input_flabel, fake_image_f, use_pool=True)
@@ -211,11 +218,12 @@ class DSSLICModel(BaseModel):
         loss_G_SSIM = -ssim_loss(real_image, fake_image_f)
 
         # Only return the fake_B image if necessary to save BW
-        return [ [ loss_G_GAN, loss_G_GAN_Feat, loss_G_VGG, loss_G_DIS, loss_G_SSIM, loss_D_real, loss_D_fake ], None if not infer else real_image, None if not infer else input_flabel, None if not infer else fake_image_f, None if not infer else res, None if not infer else comp_image, None if not infer else up_image ]        
+        return [[ loss_G_GAN, loss_G_GAN_Feat, loss_G_VGG, loss_G_DIS, loss_G_SSIM, loss_D_real, loss_D_fake ], None if not infer else real_image, None if not infer else input_flabel, None if not infer else fake_image_f, None if not infer else nn_generated_details, None if not infer else comp_image, None if not infer else up_image]
     
     def inference(self, real, flabel, ds):
         # Encode Inputs                
         input_flabel, real_image, ds = self.encode_input(flabel_map=Variable(flabel), real_image=Variable(real), ds_image=Variable(ds), infer=True)
+        start_time = time.time()
 
         # input to G: DS or compG output
         if self.opt.comp_type=='compG': # use compG
@@ -229,7 +237,7 @@ class DSSLICModel(BaseModel):
             input_flabel = input_flabel.cpu()            
             real_image = real_image.cpu()
 
-          start_time = time.time()
+
           comp_image = self.compG.forward(compG_input)
           print("--- CompNet: %s seconds ---" % (time.time() - start_time))          
                                 
@@ -241,7 +249,7 @@ class DSSLICModel(BaseModel):
           upsample = torch.nn.Upsample(size=(hw[2],hw[3]), mode='bilinear')          
           input_flabel = upsample(input_flabel)
 
-        else: # use bicubic ds
+        elif self.opt.comp_type=='ds' or self.opt.comp_type=='jp2': # use bicubic ds
           up_image = ds
           comp_image = ds
         
@@ -257,16 +265,16 @@ class DSSLICModel(BaseModel):
         else: # no seg
           if self.opt.comp_type!='ds': # ds            
             input_fconcat = up_image
-        
-        res_image = self.netG.forward(input_fconcat)
-        fake_image = res_image + up_image
+
+        nn_generated_fine_details = self.netG.forward(input_fconcat) # fine details image, i.e., f in the Akbari's paper
+        fake_image = nn_generated_fine_details + up_image
         print("--- RecNet: %s seconds ---" % (time.time() - start_time))
         
-        return fake_image, res_image, comp_image, up_image
+        return fake_image, nn_generated_fine_details, comp_image, up_image
 
     def save(self, which_epoch):
-    self.save_network(self.compG, 'C', which_epoch, self.gpu_ids)
-        self.save_network(self.netG, 'G', which_epoch, self.gpu_ids)        
+        self.save_network(self.compG, 'C', which_epoch, self.gpu_ids)
+        self.save_network(self.netG, 'G', which_epoch, self.gpu_ids)
         self.save_network(self.netD, 'D', which_epoch, self.gpu_ids)
 
     def update_fixed_params(self):

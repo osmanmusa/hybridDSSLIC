@@ -1,6 +1,9 @@
 ### Copyright (C) 2017 NVIDIA Corporation. All rights reserved. 
 ### Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode).
 
+# --name cityscapes_model --dataroot ./datasets/cityscapes/ --label_nc 35 --loadSize 1024 --resize_or_crop scale_width --batchSize 2
+# --name ADE20K_model --dataroot ./datasets/ADE20K/ --label_nc 151 --loadSize 256 --resize_or_crop resize --batchSize 8
+
 import time
 from collections import OrderedDict
 from options.train_options import TrainOptions
@@ -12,11 +15,10 @@ import os
 import numpy as np
 import torch
 from torch.autograd import Variable
-from StringIO import StringIO
-import scipy.misc
+
+os.environ["CUDA_LAUNCH_BLOCKING"]="1"
 
 opt = TrainOptions().parse()
-
 iter_path = os.path.join(opt.checkpoints_dir, opt.name, 'iter.txt')
 if opt.continue_train:
     try:
@@ -36,6 +38,7 @@ if opt.debug:
 
 data_loader = CreateDataLoader(opt)
 dataset = data_loader.load_data()
+dataset.num_workers = 0
 dataset_size = len(data_loader)
 print('#training images = %d' % dataset_size)
 
@@ -55,19 +58,22 @@ for epoch in range(start_epoch, opt.niter + opt.niter_decay + 1):
 
         # whether to collect output images
         save_fake = total_steps % opt.display_freq == 0
-        
-        losses, real, label ,generated, res, comp, up = model(Variable(data['label']), Variable(data['image']), Variable(data['ds']), infer=save_fake)
+
+        losses, real, label, generated, nn_generated_details, compressed, upsampled = model(Variable(data['label']), Variable(data['image']), Variable(data['ds']), infer=save_fake)
         
         # sum per device losses
         losses = [ torch.mean(x) if not isinstance(x, int) else x for x in losses ]
         loss_dict = dict(zip(model.module.loss_names, losses))
 
         # calculate final loss scalar
-        loss_D = (loss_dict['D_fake'] + loss_dict['D_real']) * 0.5        
-        loss_G = loss_dict['G_GAN'] + loss_dict['G_GAN_Feat'] + loss_dict['G_VGG'] + loss_dict['G_DIS'] + loss_dict['G_SSIM']
+        loss_D = (loss_dict['D_fake'] + loss_dict['D_real']) * 0.5
+        if epoch > opt.niter:
+            loss_G = loss_dict['G_GAN'] + loss_dict['G_GAN_Feat'] + loss_dict['G_SSIM']
+        else:
+            loss_G = loss_dict['G_GAN'] + loss_dict['G_GAN_Feat'] + loss_dict['G_VGG'] + loss_dict['G_DIS'] + loss_dict['G_SSIM']
 
         ############### Backward Pass ####################
-        # update generator weights
+        # update generator (and possibly compressor) weights
         model.module.optimizer_G.zero_grad()
         loss_G.backward()        
         model.module.optimizer_G.step()        
@@ -80,7 +86,10 @@ for epoch in range(start_epoch, opt.niter + opt.niter_decay + 1):
         ############## Display results and errors ##########
         ### print out errors
         if total_steps % opt.print_freq == 0:
-            errors = {k: v.data[0] if not isinstance(v, int) else v for k, v in loss_dict.items()}
+
+            # errors = {k: v.data[0] if not isinstance(v, int) else v for k, v in loss_dict.items()}
+            errors = {k: v.item() if not (isinstance(v, int) or isinstance(v, float)) else v for k, v in loss_dict.items()}
+
             #errors['psp_loss'] = psp_train_loss.avg
             t = (time.time() - iter_start_time) / opt.batchSize
             visualizer.print_current_errors(epoch, epoch_iter, errors, t)
@@ -92,9 +101,9 @@ for epoch in range(start_epoch, opt.niter + opt.niter_decay + 1):
             i=0
             visuals = OrderedDict([
                                    ('input_label', util.tensor2label(data['label'][i], opt.label_nc)),
-                                   ('fine_image', util.tensor2im(res.data[i])),
-                                   ('comp_image', util.tensor2im(comp.data[i])),
-                                   ('up_image', util.tensor2im(up.data[i])),
+                                   ('fine_image', util.tensor2im(nn_generated_details.data[i])),
+                                   ('comp_image', util.tensor2im(compressed.data[i])),
+                                   ('up_image', util.tensor2im(upsampled.data[i])),
                                    ('synthesized_image', util.tensor2im(generated.data[i])),
                                    ('real_image', util.tensor2im(data['image'][i]))])
             visualizer.display_current_results(visuals, epoch, epoch_iter)
@@ -124,6 +133,5 @@ for epoch in range(start_epoch, opt.niter + opt.niter_decay + 1):
     ### linearly decay learning rate after certain iterations
     if epoch > opt.niter:
         model.module.update_learning_rate()
-        
-if __name__ == '__main__':
-    main()
+
+print('Finished training')

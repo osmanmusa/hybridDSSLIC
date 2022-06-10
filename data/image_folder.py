@@ -18,6 +18,18 @@ def is_image_file(filename):
     return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
 
 
+def make_dataset_comp(dir, opt):
+    images = []
+    assert os.path.isdir(dir), '%s is not a valid directory' % dir
+    fileList = sorted(os.walk(dir))
+    for root, _, fnames in fileList:
+        for fname in fnames:
+            if is_image_file(fname):
+                path = os.path.join(root, fname)
+            if ((opt.phase=='test')or(opt.phase=='train')):
+                images.append(path)
+    return images
+
 def make_dataset(dir, opt):
     images = []
     assert os.path.isdir(dir), '%s is not a valid directory' % dir
@@ -26,8 +38,8 @@ def make_dataset(dir, opt):
         for fname in fnames:
             if is_image_file(fname):
                 path = os.path.join(root, fname)
-        if ((opt.phase=='test')or(opt.phase=='train')and min(Image.open(path).size) >= 512):
-                images.append(path)        
+            if ((opt.phase=='test')or(opt.phase=='train')and min(Image.open(path).size) >= 512):
+                    images.append(path)
     return images
 
 

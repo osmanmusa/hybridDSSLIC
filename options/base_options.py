@@ -16,7 +16,7 @@ class BaseOptions():
         self.parser.add_argument('--name', type=str, default='label2city', help='name of the experiment. It decides where to store samples and models')        
         self.parser.add_argument('--gpu_ids', type=str, default='0', help='gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')                       
         self.parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints', help='models are saved here')
-        self.parser.add_argument('--norm', type=str, default='instance', help='instance normalization or batch normalization')        
+        self.parser.add_argument('--norm', type=str, default='instance', help='instance normalization or batch normalization')
         self.parser.add_argument('--use_dropout', action='store_true', help='use dropout for the generator')
 
         # input/output sizes       
@@ -52,6 +52,7 @@ class BaseOptions():
 
         # for instance-wise features
         self.parser.add_argument('--comp_type', type=str, default='compG', help='use *ds* or *compG* as the downsampled input to G')
+        self.parser.add_argument('--comp_ratio', type=int, default=131, help='vector length for encoded features')
         self.parser.add_argument('--no_seg', action='store_true', help='if specified, do *not* use seg map as input')
         self.parser.add_argument('--no_instance', action='store_false', help='if specified, add instance map as input')        
         self.parser.add_argument('--instance_feat', action='store_true', help='if specified, add encoded instance features as input')

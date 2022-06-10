@@ -65,13 +65,26 @@ class BaseModel(torch.nn.Module):
                 pretrained_dict = torch.load(save_path)                
                 model_dict = network.state_dict()
                 try:
-                    pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}                    
+                    pretrained_dict2 = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+                    pretrained_dict3 = {}
+                    for k, v in pretrained_dict.items():
+                        if k in model_dict:
+                            pretrained_dict3[k] = v
+                        else:
+                            print(k)
+
+                        # Print model's state_dict
+                    print("Model's state_dict:")
+                    for param_tensor in network.state_dict():
+                        print(param_tensor, "\t", network.state_dict()[param_tensor].size())
+
+
                     network.load_state_dict(pretrained_dict)
                     print('Pretrained network %s has excessive layers; Only loading layers that are used' % network_label)
                 except:
                     print('Pretrained network %s has fewer layers; The following are not initialized:' % network_label)
-                    from sets import Set
-                    not_initialized = Set()
+                    # from sets import Set
+                    not_initialized = set()
                     for k, v in pretrained_dict.items():                      
                         if v.size() == model_dict[k].size():
                             model_dict[k] = v

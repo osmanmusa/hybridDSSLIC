@@ -21,14 +21,15 @@ def get_norm_layer(norm_type='instance'):
     if norm_type == 'batch':
         norm_layer = functools.partial(nn.BatchNorm2d, affine=True)
     elif norm_type == 'instance':
-        norm_layer = functools.partial(nn.InstanceNorm2d, affine=False)
+        norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=True)
     else:
         raise NotImplementedError('normalization layer [%s] is not found' % norm_type)
     return norm_layer
 
-def define_compG(input_nc, output_nc, ngf, n_downsample_global=3, norm='instance', gpu_ids=[]):    
-    norm_layer = get_norm_layer(norm_type=norm)     
-    netcompG = CompGenerator(input_nc, output_nc, ngf, n_downsample_global, norm_layer)    
+def define_compG(comp_type, input_nc, output_nc, ngf, n_downsample_global=3, norm='instance', gpu_ids=[]):
+
+    norm_layer = get_norm_layer(norm_type=norm)
+    netcompG = CompGenerator(comp_type, input_nc, output_nc, ngf, n_downsample_global, norm_layer)
     print(netcompG)
     if len(gpu_ids) > 0:
         assert(torch.cuda.is_available())   
@@ -148,8 +149,6 @@ class VGGLoss(nn.Module):
             loss += self.weights[i] * self.criterion(x_vgg[i], y_vgg[i].detach())
                                     
         return loss
-        
-
 ##############################################################################
 # Generator
 ##############################################################################
@@ -208,24 +207,27 @@ class LocalEnhancer(nn.Module):
         return output_prev
 
 class CompGenerator(nn.Module):
-    def __init__(self, input_nc, output_nc, ngf=32, n_downsampling=3, norm_layer=nn.BatchNorm2d):
+    def __init__(self, comp_type, input_nc, output_nc, ngf=32, n_downsampling=3, norm_layer=nn.BatchNorm2d):
         super(CompGenerator, self).__init__()
-        self.output_nc = output_nc        
+        self.output_nc = output_nc
 
-        model = [nn.ReflectionPad2d(3), nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0), 
-                 norm_layer(ngf), nn.ReLU(True)]             
-        
-        ### downsample
-	for i in range(n_downsampling):
-            mult = 2**i
-            model += [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1),
-                      norm_layer(ngf * mult * 2), nn.ReLU(True)]
-        
-	model += [nn.ReflectionPad2d(3), nn.Conv2d(ngf*(2**n_downsampling), output_nc, kernel_size=7, padding=0), nn.Tanh()]
+        if comp_type == 'compG':
+            model = [nn.ReflectionPad2d(3), nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0),
+                     norm_layer(ngf), nn.ReLU(True)]
+
+            ### downsample
+            for i in range(n_downsampling):
+                mult = 2**i
+                model += [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1),
+                          norm_layer(ngf * mult * 2), nn.ReLU(True)]
+
+            model += [nn.ReflectionPad2d(3), nn.Conv2d(ngf*(2**n_downsampling), output_nc, kernel_size=7, padding=0), nn.Tanh()]
+        elif comp_type == 'ds' or comp_type == 'jp2':
+            model = []
         self.model = nn.Sequential(*model)
     
     def forward(self, input):
-	return self.model(input)           
+	    return self.model(input)
 
 class GlobalGenerator(nn.Module):
     def __init__(self, input_nc, output_nc, ngf=64, n_downsampling=3, n_blocks=9, norm_layer=nn.BatchNorm2d, 
@@ -274,6 +276,7 @@ class GlobalGenerator(nn.Module):
         return self.model(input)             
         
 # Define a resnet block
+
 class ResnetBlock(nn.Module):
     def __init__(self, dim, padding_type, norm_layer, activation=nn.ReLU(True), use_dropout=False):
         super(ResnetBlock, self).__init__()
@@ -315,7 +318,6 @@ class ResnetBlock(nn.Module):
         #print(x.size())
         out = x + self.conv_block(x)
         return out
-
 
 class MultiscaleDiscriminator(nn.Module):
     def __init__(self, input_nc, ndf=64, n_layers=3, norm_layer=nn.BatchNorm2d, 
@@ -411,6 +413,7 @@ class NLayerDiscriminator(nn.Module):
             return self.model(input)        
 
 from torchvision import models
+
 class Vgg19(torch.nn.Module):
     def __init__(self, requires_grad=False):
         super(Vgg19, self).__init__()
